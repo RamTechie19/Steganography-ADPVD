@@ -1,55 +1,52 @@
-from PIL import Image
 import numpy as np
-from utils import pixel_difference, get_embedding_capacity, extract_bits
+from utils import (
+    compute_HOG, compute_threshold, identify_POI,
+    pixel_difference, get_embedding_capacity, extract_bits
+)
 
 def decode_image(stego_image):
-    # Convert image to numpy array
-    stego_array = np.array(stego_image)
+    """Decode a message from a stego image using P-ADPVD technique."""
+    try:
+        # Convert image to numpy array
+        stego_array = np.array(stego_image.convert("RGB"))
+        height, width, _ = stego_array.shape
 
-    # Check if the image is grayscale or color
-    if len(stego_array.shape) == 2:
-        # Grayscale image
-        flat_image = stego_array.reshape(-1)
-    elif len(stego_array.shape) == 3:
-        # Color image
-        flat_image = stego_array.reshape(-1, 3)
-    else:
-        raise ValueError("Unsupported image format")
+        # Compute HOG and identify POI
+        hog_features = compute_HOG(stego_array)
+        threshold = compute_threshold(hog_features)
+        poi_indices = identify_POI(hog_features, threshold)
 
-    # Initialize variables
-    extracted_bits = ""
-    pixel_index = 0
+        if len(poi_indices) == 0:
+            raise ValueError("No POI indices found. Decoding failed.")
 
-    # Extract the message
-    while True:
-        if pixel_index + 1 >= len(flat_image):
-            break
+        print(f"Decoding POI indices: {poi_indices[:10]}")
 
-        # Get two consecutive pixels
-        pixel1 = flat_image[pixel_index]
-        pixel2 = flat_image[pixel_index + 1]
+        # Extract message
+        extracted_bits = ""
+        for i in poi_indices:
+            row, col = divmod(i, width)
+            pixel1, pixel2 = stego_array[row, col], stego_array[row, (col+1) % width]
 
-        # Calculate pixel difference and embedding capacity
-        diff = pixel_difference(pixel1, pixel2)
-        capacity = get_embedding_capacity(diff)
+            diff = pixel_difference(pixel1, pixel2)
+            capacity = get_embedding_capacity(diff)
 
-        # Extract bits from the pixels
-        bits = extract_bits(pixel1, pixel2, capacity)
-        extracted_bits += bits
+            print(f"Decoding at ({row},{col}): {pixel1}, {pixel2} | Capacity: {capacity}")
 
-        # Move to the next set of pixels
-        pixel_index += 2
+            extracted_bits += extract_bits(pixel1, pixel2)
 
-        # Check for null terminator
-        if extracted_bits[-8:] == '00000000':
-            extracted_bits = extracted_bits[:-8]  # Remove null terminator
-            break
+            # Check for null terminator
+            if len(extracted_bits) >= 8 and "00000000" in extracted_bits:
+                extracted_bits = extracted_bits[:extracted_bits.index("00000000")]
+                break
 
-    # Convert binary message to text
-    message = ""
-    for i in range(0, len(extracted_bits), 8):
-        byte = extracted_bits[i:i+8]
-        if len(byte) == 8:
-            message += chr(int(byte, 2))
+        # Convert binary to text
+        message = ""
+        for i in range(0, len(extracted_bits), 8):
+            if i + 8 <= len(extracted_bits):
+                char = chr(int(extracted_bits[i:i+8], 2))
+                message += char
 
-    return message
+        return message
+
+    except Exception as e:
+        raise Exception(f"Decoding failed: {str(e)}")

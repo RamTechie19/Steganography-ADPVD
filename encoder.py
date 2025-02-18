@@ -1,64 +1,56 @@
 from PIL import Image
 import numpy as np
-from utils import pixel_difference, get_embedding_capacity, embed_bits
+from utils import (
+    compute_HOG, compute_threshold, identify_POI,
+    pixel_difference, get_embedding_capacity, embed_bits
+)
 
 def encode_image(cover_image, message):
-    # Get the original image mode
-    original_mode = cover_image.mode
+    """Encode a message into an image using P-ADPVD technique."""
+    try:
+        # Convert image to numpy array
+        cover_array = np.array(cover_image.convert("RGB"))
+        height, width, _ = cover_array.shape
 
-    # Convert image to RGB if it's not already
-    if original_mode != 'RGB':
-        cover_image = cover_image.convert('RGB')
+        # Convert message to binary with null terminator
+        binary_message = ''.join(format(ord(c), '08b') for c in message) + '00000000'
+        print(f"Binary message: {binary_message}")
 
-    # Convert image to numpy array
-    cover_array = np.array(cover_image)
-    height, width, channels = cover_array.shape
+        # Compute HOG and identify POI
+        hog_features = compute_HOG(cover_array)
+        threshold = compute_threshold(hog_features)
+        poi_indices = identify_POI(hog_features, threshold)
 
-    # Convert message to binary
-    binary_message = ''.join(format(ord(char), '08b') for char in message)
-    binary_message += '00000000'  # Add null terminator
+        if len(poi_indices) == 0:
+            raise ValueError("No suitable points of interest found in the image")
 
-    # Flatten the image array
-    flat_image = cover_array.reshape(-1, channels)
+        print(f"Encoding POI indices: {poi_indices[:10]}")
 
-    # Initialize variables
-    message_index = 0
-    pixel_index = 0
+        # Embed message
+        message_index = 0
+        for i in poi_indices:
+            if message_index >= len(binary_message):
+                break
 
-    # Embed the message
-    while message_index < len(binary_message):
-        if pixel_index + 1 >= len(flat_image):
-            raise ValueError("Message is too long for this image")
+            row, col = divmod(i, width)
+            pixel1, pixel2 = cover_array[row, col], cover_array[row, (col+1) % width]
 
-        # Get two consecutive pixels
-        pixel1 = flat_image[pixel_index]
-        pixel2 = flat_image[pixel_index + 1]
+            diff = pixel_difference(pixel1, pixel2)
+            capacity = get_embedding_capacity(diff)
 
-        # Calculate pixel difference and embedding capacity
-        diff = pixel_difference(pixel1, pixel2)
-        capacity = get_embedding_capacity(diff)
+            print(f"Encoding at ({row},{col}): {pixel1}, {pixel2} | Capacity: {capacity}")
 
-        # Embed bits in the pixels
-        bits_to_embed = binary_message[message_index:message_index + capacity]
-        new_pixel1, new_pixel2 = embed_bits(pixel1, pixel2, bits_to_embed)
+            bits_to_embed = binary_message[message_index:message_index + capacity]
+            new_pixel1, new_pixel2 = embed_bits(pixel1, pixel2, bits_to_embed)
 
-        # Update the image array
-        flat_image[pixel_index] = new_pixel1
-        flat_image[pixel_index + 1] = new_pixel2
+            cover_array[row, col] = new_pixel1
+            cover_array[row, (col+1) % width] = new_pixel2
+            message_index += capacity
 
-        # Move to the next set of pixels and bits
-        pixel_index += 2
-        message_index += capacity
+        if message_index < len(binary_message):
+            raise ValueError("Image capacity insufficient for message length")
 
-    # Reshape the flattened array back to the original image shape
-    stego_array = flat_image.reshape(height, width, channels)
+        return Image.fromarray(cover_array.astype('uint8'))
 
-    # Create a new image from the modified array
-    stego_image = Image.fromarray(stego_array.astype('uint8'), 'RGB')
-
-    # Convert back to the original mode if necessary
-    if original_mode != 'RGB':
-        stego_image = stego_image.convert(original_mode)
-
-    return stego_image
-
+    except Exception as e:
+        raise Exception(f"Encoding failed: {str(e)}")
